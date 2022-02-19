@@ -7,11 +7,10 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"text/tabwriter"
 
 	"github.com/gocolly/colly"
-	"github.com/umpc/go-sortedmap"
-	"github.com/umpc/go-sortedmap/desc"
 	"gopkg.in/cheggaaa/pb.v1"
 )
 
@@ -64,35 +63,49 @@ func compareRepo(fork string) (int, int) {
 	return ahead, behind
 }
 
+type res struct{ 
+	fork string
+	ahead, behind int 
+}
+
 func main() {
 	if (len(os.Args) < 2) {
 		os.Stderr.WriteString("Usage: forkizard owner/repo\n")
 		os.Exit(1)
 	}
 	forks := listForks(os.Args[1])
-	mahead := make(map[string]int)
-	mbehind := make(map[string]int)
-	sm := sortedmap.New(len(forks), desc.Int)
+	ch := make(chan res, len(forks))
 	bar := pb.StartNew(len(forks))
+
+	var wg sync.WaitGroup
 	for _, fork := range forks {
-		bar.Increment()
-		ahead, behind := compareRepo(fork)
-		if ahead > 0 {
-			mahead[fork] = ahead
-			mbehind[fork] = behind
-			sm.Insert(fork, ahead-behind)
+		wg.Add(1)
+		go func(fork string) {
+			defer wg.Done()
+			defer bar.Increment()
+			ahead, behind := compareRepo(fork)
+			ch <- res{fork: fork, ahead: ahead, behind: behind}
+		}(fork)
+	}
+
+	wg.Wait()
+	close(ch)
+	bar.FinishPrint("done")
+
+	results := make(map[string]res, len(forks))
+	for i := 1; i <= len(forks); i++ {
+		result, ok := <-ch
+		if !ok {
+			bar.FinishPrint("Error")
+			return
+		} else if result.ahead > 0 {
+				results[result.fork] = result
 		}
 	}
-	bar.FinishPrint("done")
-	iter, err := sm.IterCh()
-	if (err != nil) {
-		bar.FinishPrint(err.Error())
-	} else {
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', 0)
-		for rec := range iter.Records() {
-			key := rec.Key.(string)
-			fmt.Fprintln(w, fmt.Sprintf("%s\t+%d -%d", key, mahead[key], mbehind[key]))
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', 0)
+		for key, value := range results {
+			fmt.Fprintf(w, "%s\t+%d -%d\n", key, value.ahead, value.behind)
 		}
 		w.Flush()
-    }
 }
