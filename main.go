@@ -11,6 +11,8 @@ import (
 	"text/tabwriter"
 
 	"github.com/gocolly/colly"
+	"github.com/umpc/go-sortedmap"
+	"github.com/umpc/go-sortedmap/desc"
 	"gopkg.in/cheggaaa/pb.v1"
 )
 
@@ -74,6 +76,7 @@ func main() {
 		os.Exit(1)
 	}
 	forks := listForks(os.Args[1])
+	sm := sortedmap.New(len(forks), desc.Int)
 	ch := make(chan res, len(forks))
 	bar := pb.StartNew(len(forks))
 
@@ -99,13 +102,22 @@ func main() {
 			bar.FinishPrint("Error")
 			return
 		} else if result.ahead > 0 {
+				sm.Insert(result.fork, result.ahead-result.behind)
 				results[result.fork] = result
 		}
 	}
 
+	iter, err := sm.IterCh()
+	if err != nil {
+		bar.FinishPrint(err.Error())
+		return
+	}
+
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', 0)
-		for key, value := range results {
-			fmt.Fprintf(w, "%s\t+%d -%d\n", key, value.ahead, value.behind)
-		}
-		w.Flush()
+	for rec := range iter.Records() {
+		key := rec.Key.(string)
+		result := results[key]
+		fmt.Fprintln(w, fmt.Sprintf("%s\t+%d -%d", key, result.ahead, result.behind))
+	}
+	w.Flush()
 }
