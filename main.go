@@ -1,82 +1,69 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"log"
 	"os"
-	"regexp"
-	"strconv"
 	"strings"
+	"sync"
 	"text/tabwriter"
 
-	"github.com/gocolly/colly"
+	"github.com/google/go-github/v48/github"
 	"github.com/umpc/go-sortedmap"
 	"github.com/umpc/go-sortedmap/desc"
 	"gopkg.in/cheggaaa/pb.v1"
 )
 
-// forkURL returns the URL for network members.
-func forkURL(repo string) string {
-	return fmt.Sprintf("https://github.com/%s/network/members", repo)
-}
+var (
+	once   sync.Once
+	client *github.Client
+)
 
-// repoURL returns the URL of a repository.
-func repoURL(repo string) string {
-	return fmt.Sprintf("https://github.com/%s", repo)
+func GetClient() *github.Client {
+	once.Do(func() {
+		client = github.NewClient(nil)
+	})
+	return client
 }
 
 // listForks lists all forks of repo.
-func listForks(repo string) []string {
-	c := colly.NewCollector()
+func listForks(owner, repo string) []string {
+	client := GetClient()
+	forks, _, _ := client.Repositories.ListForks(context.Background(), owner, repo, nil)
 	res := []string{}
-	c.OnHTML(".repo a", func(e *colly.HTMLElement) {
-		href := e.Attr("href")
-		// Only append repository links.
-		if strings.Count(href, "/") == 2 {
-			res = append(res, href)
-		}
-	})
-	c.Visit(forkURL(repo))
-	log.Printf("%d forks\n", len(res))
+	for _, f := range forks {
+		res = append(res, fmt.Sprintf("%s/%s", *f.Owner.Login, repo))
+	}
 	return res
 }
 
-var re = regexp.MustCompile(`(?P<ahead>\d+) commit[s]? ahead(, (?P<behind>\d+) commit[s]? behind)?`)
-
 // compareRepo compares a repository.
 // FIXME: Fork chains...
-func compareRepo(fork string) (int, int) {
-	ahead := -1
-	behind := -1
-	c := colly.NewCollector()
-	c.OnHTML(".flex-auto.d-flex", func(e *colly.HTMLElement) {
-		// Only considering forks ahead.
-		if strings.Contains(e.Text, "ahead") {
-			match := re.FindStringSubmatch(e.Text)
-			ahead, _ = strconv.Atoi(match[1])
-			behind, _ = strconv.Atoi(match[3])
-		}
-	})
-	c.Visit(repoURL(fork))
-	// if ahead > 0 {
-	// 	pp.Println(fork, ahead, behind)
-	// }
-	return ahead, behind
+func compareRepo(owner, repo, parent string) (int, int) {
+	client := GetClient()
+	comparison, _, err := client.Repositories.CompareCommits(context.Background(), owner, repo, "master", parent+":"+repo+":master", nil)
+	if err != nil {
+		fmt.Printf("%s", err.Error())
+		return 0, 0
+	}
+	return *comparison.AheadBy, *comparison.BehindBy
 }
 
 func main() {
-	if (len(os.Args) < 2) {
+	if len(os.Args) < 2 {
 		os.Stderr.WriteString("Usage: forkizard owner/repo\n")
 		os.Exit(1)
 	}
-	forks := listForks(os.Args[1])
+	actualArgs := strings.Split(os.Args[1], "/")
+	forks := listForks(actualArgs[0], actualArgs[1])
 	mahead := make(map[string]int)
 	mbehind := make(map[string]int)
 	sm := sortedmap.New(len(forks), desc.Int)
 	bar := pb.StartNew(len(forks))
 	for _, fork := range forks {
 		bar.Increment()
-		ahead, behind := compareRepo(fork)
+		forkArgs := strings.Split(fork, "/")
+		ahead, behind := compareRepo(forkArgs[0], forkArgs[1], actualArgs[0])
 		if ahead > 0 {
 			mahead[fork] = ahead
 			mbehind[fork] = behind
@@ -85,7 +72,7 @@ func main() {
 	}
 	bar.FinishPrint("done")
 	iter, err := sm.IterCh()
-	if (err != nil) {
+	if err != nil {
 		bar.FinishPrint(err.Error())
 	} else {
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', 0)
@@ -94,5 +81,5 @@ func main() {
 			fmt.Fprintln(w, fmt.Sprintf("%s\t+%d -%d", key, mahead[key], mbehind[key]))
 		}
 		w.Flush()
-    }
+	}
 }
