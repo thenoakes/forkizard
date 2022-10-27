@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 	"sync"
 	"text/tabwriter"
 
@@ -27,25 +26,33 @@ func GetClient() *github.Client {
 }
 
 // listForks lists all forks of repo.
-func listForks(owner, repo string) []string {
+func listForks(r *repo) []*repo {
 	client := GetClient()
-	forks, _, _ := client.Repositories.ListForks(context.Background(), owner, repo, nil)
-	res := []string{}
+	forks, _, _ := client.Repositories.ListForks(context.Background(), r.owner, r.name, nil)
+	res := []*repo{}
 	for _, f := range forks {
-		res = append(res, fmt.Sprintf("%s/%s", *f.Owner.Login, repo))
+		res = append(res, FromAPI(f))
 	}
 	return res
 }
 
 // compareRepo compares a repository.
 // FIXME: Fork chains...
-func compareRepo(owner, repo, parent string) (int, int) {
+func compareRepo(fork *repo, parent *repo) (int, int) {
 	client := GetClient()
-	comparison, _, err := client.Repositories.CompareCommits(context.Background(), owner, repo, "master", parent+":"+repo+":master", nil)
+	comparison, _, err := client.Repositories.CompareCommits(
+		context.Background(), 
+		fork.owner, 
+		fork.name, 
+		"master", 
+		parent.owner+":"+parent.name+":master",
+		nil)
+
 	if err != nil {
 		fmt.Printf("%s", err.Error())
 		return 0, 0
 	}
+
 	return *comparison.AheadBy, *comparison.BehindBy
 }
 
@@ -54,23 +61,25 @@ func main() {
 		os.Stderr.WriteString("Usage: forkizard owner/repo\n")
 		os.Exit(1)
 	}
-	actualArgs := strings.Split(os.Args[1], "/")
-	forks := listForks(actualArgs[0], actualArgs[1])
+
+	parentRepo := ParseKey(os.Args[1])
+	forks := listForks(parentRepo)
+
 	mahead := make(map[string]int)
 	mbehind := make(map[string]int)
 	sm := sortedmap.New(len(forks), desc.Int)
 	bar := pb.StartNew(len(forks))
 	for _, fork := range forks {
 		bar.Increment()
-		forkArgs := strings.Split(fork, "/")
-		ahead, behind := compareRepo(forkArgs[0], forkArgs[1], actualArgs[0])
+		ahead, behind := compareRepo(fork, parentRepo)
 		if ahead > 0 {
-			mahead[fork] = ahead
-			mbehind[fork] = behind
-			sm.Insert(fork, ahead-behind)
+			mahead[fork.key] = ahead
+			mbehind[fork.key] = behind
+			sm.Insert(fork.key, ahead-behind)
 		}
 	}
 	bar.FinishPrint("done")
+
 	iter, err := sm.IterCh()
 	if err != nil {
 		bar.FinishPrint(err.Error())
@@ -78,7 +87,7 @@ func main() {
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', 0)
 		for rec := range iter.Records() {
 			key := rec.Key.(string)
-			fmt.Fprintln(w, fmt.Sprintf("%s\t+%d -%d", key, mahead[key], mbehind[key]))
+			fmt.Fprintf(w, "%s\t+%d -%d\n", key, mahead[key], mbehind[key])
 		}
 		w.Flush()
 	}
