@@ -10,6 +10,7 @@ import (
 	"github.com/google/go-github/v48/github"
 	"github.com/umpc/go-sortedmap"
 	"github.com/umpc/go-sortedmap/desc"
+	"golang.org/x/oauth2"
 	"gopkg.in/cheggaaa/pb.v1"
 )
 
@@ -20,7 +21,12 @@ var (
 
 func GetClient() *github.Client {
 	once.Do(func() {
-		client = github.NewClient(nil)
+		ctx := context.Background()
+		ts := oauth2.StaticTokenSource(
+			&oauth2.Token{AccessToken: os.Getenv("GITHUB_ACCESS_TOKEN")},
+		)
+		tc := oauth2.NewClient(ctx, ts)
+		client = github.NewClient(tc)
 	})
 	return client
 }
