@@ -41,10 +41,10 @@ func listForks(r *repo) []*repo {
 func compareRepo(fork *repo, parent *repo) (int, int) {
 	client := GetClient()
 	comparison, _, err := client.Repositories.CompareCommits(
-		context.Background(), 
-		fork.owner, 
-		fork.name, 
-		"master", 
+		context.Background(),
+		fork.owner,
+		fork.name,
+		"master",
 		parent.owner+":"+parent.name+":master",
 		nil)
 

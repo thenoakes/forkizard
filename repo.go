@@ -14,17 +14,17 @@ type repo struct {
 func ParseKey(key string) *repo {
 	parts := strings.Split(key, "/")
 	return &repo{
-		key: key,
+		key:   key,
 		owner: parts[0],
-		name: parts[1],
+		name:  parts[1],
 	}
 }
 
 func FromAPI(gr *github.Repository) *repo {
 	owner, name := *gr.Owner.Login, *gr.Name
 	return &repo{
-		key: fmt.Sprintf("%s/%s", owner, name),
+		key:   fmt.Sprintf("%s/%s", owner, name),
 		owner: owner,
-		name: name,
+		name:  name,
 	}
 }
