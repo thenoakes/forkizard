@@ -14,6 +14,8 @@ import (
 	"gopkg.in/cheggaaa/pb.v1"
 )
 
+const authEnv = "GITHUB_ACCESS_TOKEN"
+
 var (
 	once   sync.Once
 	client *github.Client
@@ -21,12 +23,19 @@ var (
 
 func GetClient() *github.Client {
 	once.Do(func() {
-		ctx := context.Background()
-		ts := oauth2.StaticTokenSource(
-			&oauth2.Token{AccessToken: os.Getenv("GITHUB_ACCESS_TOKEN")},
-		)
-		tc := oauth2.NewClient(ctx, ts)
-		client = github.NewClient(tc)
+		auth := os.Getenv(authEnv)
+		if auth != "" {
+			ctx := context.Background()
+			ts := oauth2.StaticTokenSource(
+				&oauth2.Token{AccessToken: auth},
+			)
+			tc := oauth2.NewClient(ctx, ts)
+			client = github.NewClient(tc)
+		} else {
+			fmt.Println("Running in unauthenticated mode.")
+			fmt.Printf("Set %s to a personal access token to use authenticated API requests.\n", authEnv)
+			client = github.NewClient(nil)
+		}
 	})
 	return client
 }
@@ -34,11 +43,37 @@ func GetClient() *github.Client {
 // listForks lists all forks of repo.
 func listForks(r *repo) []*repo {
 	client := GetClient()
-	forks, _, _ := client.Repositories.ListForks(context.Background(), r.owner, r.name, nil)
+
+	pageNumber := 1
 	res := []*repo{}
-	for _, f := range forks {
-		res = append(res, FromAPI(f))
+	for {
+		fmt.Printf("Fetching page %d...\n", pageNumber)
+		forks, _, err := client.Repositories.ListForks(
+			context.Background(),
+			r.owner,
+			r.name,
+			&github.RepositoryListForksOptions{
+				ListOptions: github.ListOptions{
+					PerPage: 100,
+					Page:    pageNumber,
+				},
+			})
+
+		if err != nil {
+			fmt.Println(err.Error())
+		}
+
+		for _, f := range forks {
+			res = append(res, FromAPI(f))
+		}
+
+		if len(forks) == 0 {
+			break
+		} else {
+			pageNumber += 1
+		}
 	}
+
 	return res
 }
 
